@@ -27,8 +27,6 @@ def enable_roles(oso):
 
             role_allow(role: OrganizationRole{name: "MEMBER"}, "READ", org: Organization);
 
-
-
     ``resource_role_applies_to(child_resource, parent_resource)``:
         Permits roles that control access to `parent_resource` apply to
         `child_resource` as well. `parent_resource` must be a resource
@@ -74,8 +72,6 @@ def enable_roles(oso):
                 role_allow(new RepositoryRole{name: "WRITE"}, _action, _resource);
 
         ...and so on.
-
-
 
 
     :param oso: The Oso instance used to evaluate the policy.
