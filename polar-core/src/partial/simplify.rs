@@ -2,9 +2,27 @@ use std::collections::HashSet;
 
 use crate::folder::{fold_operation, fold_partial, fold_term, Folder};
 use crate::kb::Bindings;
-use crate::terms::{Operation, Operator, Term, TermList, Value};
+use crate::terms::{Operation, Operator, Symbol, Term, TermList, Value};
 
 use super::Partial;
+
+fn sub_this(var: &Symbol, partial: &Partial) -> Partial {
+    struct VariableSubber {
+        var: Symbol,
+    }
+
+    impl Folder for VariableSubber {
+        fn fold_variable(&mut self, v: Symbol) -> Symbol {
+            if v == self.var {
+                sym!("_this")
+            } else {
+                v
+            }
+        }
+    }
+
+    fold_partial(partial.clone(), &mut VariableSubber { var: var.clone() })
+}
 
 /// Simplify the values of the bindings to be returned to the host language.
 ///
@@ -14,11 +32,12 @@ pub fn simplify_bindings(bindings: Bindings) -> Bindings {
     bindings
         .into_iter()
         .map(|(var, value)| match value.value() {
-            Value::Partial(_) => {
-                let simplified = simplify_partial(value);
-                assert!(simplified.value().as_expression().is_ok());
+            Value::Partial(partial) => {
+                let simplified = sub_this(&var, partial);
+                // let simplified = simplify_partial(value);
+                // assert!(simplified.value().as_expression().is_ok());
 
-                (var, simplified)
+                (var, simplified.into_expression())
             }
             _ => (var, value),
         })
