@@ -572,17 +572,17 @@ impl PolarVirtualMachine {
             ));
         }
 
-        let value = match value.value() {
-            Value::Partial(p) if p.name() != var => {
-                // Rebind the previous name of the partial to the new variable that contains the
-                // partial. This is necessary because partials are mutated with new constraints.
-                // Without this rebinding, additional constraints on the new partial would not be
-                // attached to the old (partial) name.
-                self.bind(p.name(), Term::new_temporary(Value::Variable(var.clone())));
-                value.clone_with_value(Value::Partial(p.clone_with_name(var.clone())))
-            }
-            _ => value,
-        };
+        // let value = match value.value() {
+        //     Value::Partial(p) if p.name() != var => {
+        //         // Rebind the previous name of the partial to the new variable that contains the
+        //         // partial. This is necessary because partials are mutated with new constraints.
+        //         // Without this rebinding, additional constraints on the new partial would not be
+        //         // attached to the old (partial) name.
+        //         self.bind(p.name(), Term::new_temporary(Value::Variable(var.clone())));
+        //         value.clone_with_value(Value::Partial(p.clone_with_name(var.clone())))
+        //     }
+        //     _ => value,
+        // };
 
         self.bindings.push(Binding(var.clone(), value));
     }
@@ -605,7 +605,7 @@ impl PolarVirtualMachine {
             {
                 continue;
             }
-            bindings.insert(var.clone(), self.deep_deref(value));
+            bindings.insert(var.clone(), self.deref(value));
         }
         bindings
     }
@@ -1955,8 +1955,7 @@ impl PolarVirtualMachine {
             (Value::Variable(var), _) => self.unify_var(var, right)?,
             (_, Value::Variable(var)) => self.unify_var(var, left)?,
 
-            (Value::Partial(partial), _) => self.unify_partial(partial, right)?,
-            (_, Value::Partial(partial)) => self.unify_partial(partial, left)?,
+            (Value::Partial(_), _) | (_, Value::Partial(_)) => self.unify_partial(left, right),
 
             (Value::RestVariable(var), _) => self.unify_var(var, right)?,
             (_, Value::RestVariable(var)) => self.unify_var(var, left)?,
@@ -2076,6 +2075,8 @@ impl PolarVirtualMachine {
 
     /// Unify a symbol `left` with a term `right`.
     /// This is sort of a "sub-goal" of `Unify`.
+    //
+    // TODO(gj): bring ordering back
     fn unify_var(&mut self, left: &Symbol, right: &Term) -> PolarResult<()> {
         let right_value = match right.value() {
             Value::Variable(v) | Value::RestVariable(v) => self.value(v).cloned(),
@@ -2092,48 +2093,97 @@ impl PolarVirtualMachine {
         let left_value = self.value(&left).cloned();
 
         match (left_value, right_value) {
-            (Some(left), Some(right)) => {
-                // Both are bound, unify their values.
-                self.push_goal(Goal::Unify { left, right })?;
+            (Some(left_term), Some(right_term)) => match (left_term.value(), right_term.value()) {
+                (Value::Partial(left_partial), Value::Partial(right_partial)) => {
+                    let op = op!(Unify, term!(left.clone()), right.clone());
+                    self.constrain(left_partial, op.clone());
+                    self.constrain(right_partial, op);
+                }
+                (Value::Partial(left_partial), _) => {
+                    let op = op!(Unify, term!(left.clone()), right.clone());
+                    self.constrain(left_partial, op);
+                }
+                (_, Value::Partial(right_partial)) => {
+                    let op = op!(Unify, term!(left.clone()), right.clone());
+                    self.constrain(right_partial, op);
+                }
+                _ => {
+                    // Both are bound, unify their values.
+                    self.push_goal(Goal::Unify {
+                        left: left_term,
+                        right: right_term,
+                    })?;
+                }
+            },
+            (Some(left_term), _) => {
+                match left_term.value() {
+                    Value::Partial(left_partial) => {
+                        let op = op!(Unify, term!(left.clone()), right.clone());
+                        self.constrain(left_partial, op);
+                    }
+                    _ => {
+                        // Only left is bound, unify with whatever right is.
+                        self.push_goal(Goal::Unify {
+                            left: left_term,
+                            right: right.clone(),
+                        })?;
+                    }
+                }
             }
-            (Some(left), _) => {
-                // Only left is bound, unify with whatever right is.
-                self.push_goal(Goal::Unify {
-                    left,
-                    right: right.clone(),
-                })?;
-            }
-            (None, Some(term)) => {
-                // Left is unbound, right is bound; bind left to the value of right.
-                self.bind(left, term);
+            (None, Some(right_term)) => {
+                match right_term.value() {
+                    Value::Partial(right_partial) => {
+                        let op = op!(Unify, term!(left.clone()), right.clone());
+                        self.constrain(right_partial, op);
+                    }
+                    _ => {
+                        // Left is unbound, right is bound; bind left to the value of right.
+                        self.bind(left, right_term);
+                    }
+                }
             }
             (None, None) => {
                 // Neither is bound, so bind them together.
                 // TODO: should theoretically bind the earliest one here?
-                self.bind(left, right.clone());
+                // self.bind(left, right.clone());
+                self.unify_partial(&term!(left.clone()), right);
             }
         }
         Ok(())
     }
 
-    /// Unify a partial `left` with a term `right`.
+    /// Unify `left` with a term `right` where at least one is a partial.
     /// This is sort of a "sub-goal" of `Unify`.
-    fn unify_partial(&mut self, partial: &Partial, right: &Term) -> PolarResult<()> {
-        let mut partial = partial.clone();
-        if matches!(right.value(), Value::Partial(_)) {
-            return Err(self.set_error_context(
-                &right,
-                error::RuntimeError::Unsupported {
-                    msg: "cannot unify partials".to_string(),
-                },
-            ));
+    fn unify_partial(&mut self, left: &Term, right: &Term) {
+        let op = op!(Unify, left.clone(), right.clone());
+        match (left.value(), right.value()) {
+            (Value::Partial(left_partial), Value::Partial(right_partial)) => {
+                self.constrain(left_partial, op.clone());
+                self.constrain(right_partial, op);
+            }
+            (Value::Partial(left_partial), _) => {
+                self.constrain(left_partial, op);
+            }
+            (_, Value::Partial(right_partial)) => {
+                self.constrain(right_partial, op);
+            }
+            (Value::Variable(_), Value::Variable(_)) => {
+                let partial = Partial::new(sym!("woof"));
+                self.constrain(&partial, op);
+            }
+            _ => unreachable!(),
         }
+    }
 
-        partial.unify(right.clone());
-        let name = partial.name().clone();
-        self.bind(&name, partial.into_term());
-
-        Ok(())
+    fn constrain(&mut self, partial: &Partial, op: Operation) {
+        // TODO(gj): partial.clone_with_new_constraint(op) that clones existing constraints + new
+        // one.
+        let mut constraints = partial.constraints.clone();
+        constraints.push(op);
+        let partial = partial.clone_with_constraints(constraints);
+        for variable in partial.variables().iter() {
+            self.bind(&variable, partial.clone().into_term());
+        }
     }
 
     /// "Unify" two lists element-wise, respecting rest-variables.

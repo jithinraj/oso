@@ -1,9 +1,12 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::runnable::Runnable;
 use crate::terms::{
     Dictionary, InstanceLiteral, Operation, Operator, Pattern, Symbol, Term, Value,
 };
+use crate::visitor::{walk_partial, Visitor};
 
 use super::isa_constraint_check::IsaConstraintCheck;
 
@@ -65,6 +68,26 @@ impl Partial {
             constraints: vec![],
             variable,
         }
+    }
+
+    pub fn variables(&self) -> HashSet<Symbol> {
+        struct VariableVisitor {
+            vars: HashSet<Symbol>,
+        }
+
+        impl Visitor for VariableVisitor {
+            fn visit_variable(&mut self, v: &Symbol) {
+                // TODO(gj): check that var is bound to partial or unbound.
+                self.vars.insert(v.clone());
+            }
+        }
+
+        let mut visitor = VariableVisitor {
+            vars: HashSet::new(),
+        };
+
+        walk_partial(&mut visitor, &self);
+        visitor.vars
     }
 
     /// Augment our constraints with those on `other`.
@@ -681,13 +704,19 @@ mod test {
     }
 
     #[test]
-    fn test_unifying_partials() -> TestResult {
+    fn test_partial_unification() -> TestResult {
         let p = Polar::new();
-        p.load_str("h(x, y) if x = y;")?;
-        let mut q = p.new_query_from_term(term!(call!("h", [partial!("a"), partial!("b")])), false);
-        let error = q.next_event().unwrap_err();
-        assert!(matches!(error, PolarError {
-            kind: ErrorKind::Runtime(RuntimeError::Unsupported { .. }), ..}));
+        p.load_str("f(x, y) if x = y;")?;
+        let mut q = p.new_query_from_term(term!(call!("f", [sym!("x"), sym!("y")])), false);
+        // TODO(gj): where is x in the non-x bindings?
+        assert_partial_expressions!(
+            next_binding(&mut q)?,
+            "x" => "_this = _x_3 and _x_3 = _y_4",
+            "_x_3" => "y = _y_4 and _this = _y_4",
+            "y" => "_this = _y_4 and _x_3 = _y_4",
+            "_y_4" => "y = _this and _x_3 = _this"
+        );
+        assert_query_done!(q);
         Ok(())
     }
 
