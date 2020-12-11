@@ -1955,8 +1955,7 @@ impl PolarVirtualMachine {
             (Value::Variable(var), _) => self.unify_var(var, right)?,
             (_, Value::Variable(var)) => self.unify_var(var, left)?,
 
-            (Value::Partial(_), _) | (_, Value::Partial(_)) => self.unify_partial(left, right),
-
+            //(Value::Partial(_), _) | (_, Value::Partial(_)) => self.unify_partial(left, right),
             (Value::RestVariable(var), _) => self.unify_var(var, right)?,
             (_, Value::RestVariable(var)) => self.unify_var(var, left)?,
 
@@ -2095,19 +2094,31 @@ impl PolarVirtualMachine {
         match (left_value, right_value) {
             (Some(left_term), Some(right_term)) => match (left_term.value(), right_term.value()) {
                 (Value::Partial(left_partial), Value::Partial(right_partial)) => {
+                    let mut p = Partial::new(sym!("Um"));
+                    for c in left_partial.constraints {
+                        p.add_constraint(c.clone());
+                    }
+                    for c in right_partial.constraints {
+                        p.add_constraint(c.clone());
+                    }
+
+                    eprintln!("A.1 {} = {}", left.0, right.to_polar());
                     let op = op!(Unify, term!(left.clone()), right.clone());
-                    self.constrain(left_partial, op.clone());
-                    self.constrain(right_partial, op);
+                    self.constrain(p, op.clone());
+                    //self.constrain(right_partial, op);
                 }
                 (Value::Partial(left_partial), _) => {
+                    eprintln!("A.2 {} = {}", left_term.to_polar(), right_term.to_polar());
                     let op = op!(Unify, term!(left.clone()), right.clone());
                     self.constrain(left_partial, op);
                 }
                 (_, Value::Partial(right_partial)) => {
+                    eprintln!("A.3 {} = {}", left_term.to_polar(), right_term.to_polar());
                     let op = op!(Unify, term!(left.clone()), right.clone());
                     self.constrain(right_partial, op);
                 }
                 _ => {
+                    eprintln!("A.4 {} = {}", left_term.to_polar(), right_term.to_polar());
                     // Both are bound, unify their values.
                     self.push_goal(Goal::Unify {
                         left: left_term,
@@ -2118,10 +2129,12 @@ impl PolarVirtualMachine {
             (Some(left_term), _) => {
                 match left_term.value() {
                     Value::Partial(left_partial) => {
+                        eprintln!("B.1 {} = {}", left_term.to_polar(), right.to_polar());
                         let op = op!(Unify, term!(left.clone()), right.clone());
                         self.constrain(left_partial, op);
                     }
                     _ => {
+                        eprintln!("B.2 {} = {}", left_term.to_polar(), right.to_polar());
                         // Only left is bound, unify with whatever right is.
                         self.push_goal(Goal::Unify {
                             left: left_term,
@@ -2133,10 +2146,12 @@ impl PolarVirtualMachine {
             (None, Some(right_term)) => {
                 match right_term.value() {
                     Value::Partial(right_partial) => {
+                        eprintln!("C.1 {} = {}", left.0, right_term.to_polar());
                         let op = op!(Unify, term!(left.clone()), right.clone());
                         self.constrain(right_partial, op);
                     }
                     _ => {
+                        eprintln!("C.2 {} = {}", left.0, right_term.to_polar());
                         // Left is unbound, right is bound; bind left to the value of right.
                         self.bind(left, right_term);
                     }
@@ -2146,7 +2161,10 @@ impl PolarVirtualMachine {
                 // Neither is bound, so bind them together.
                 // TODO: should theoretically bind the earliest one here?
                 // self.bind(left, right.clone());
-                self.unify_partial(&term!(left.clone()), right);
+                eprintln!("D {} = {}", left.0, right.to_polar());
+                let partial = Partial::new(sym!("woof"));
+                let op = op!(Unify, term!(left.clone()), right.clone());
+                self.constrain(&partial, op);
             }
         }
         Ok(())
@@ -2181,7 +2199,14 @@ impl PolarVirtualMachine {
         let mut constraints = partial.constraints.clone();
         constraints.push(op);
         let partial = partial.clone_with_constraints(constraints);
+        // Gabe says: don't overwrite.
+        //dbg!(&partial);
         for variable in partial.variables().iter() {
+            eprintln!(
+                "Binding {} = {}",
+                variable.0,
+                partial.clone().into_term().to_polar()
+            );
             self.bind(&variable, partial.clone().into_term());
         }
     }
