@@ -667,6 +667,10 @@ impl PolarVirtualMachine {
                     _ => fold_term(t, self),
                 }
             }
+
+            fn fold_partial(&mut self, p: Partial) -> Partial {
+                p
+            }
         }
 
         Derefer::new(self).fold_term(term.clone())
@@ -724,7 +728,8 @@ impl PolarVirtualMachine {
     /// Print a message to the output stream.
     fn print<S: Into<String>>(&self, message: S) {
         let message = message.into();
-        self.messages.push(MessageKind::Print, message);
+        eprintln!("{}", message);
+        // self.messages.push(MessageKind::Print, message);
     }
 
     fn log(&self, message: &str, terms: &[&Term]) {
@@ -1331,7 +1336,7 @@ impl PolarVirtualMachine {
                 assert_eq!(generic_rule.name, predicate.name);
 
                 // Pre-filter rules.
-                let args = predicate.args.iter().map(|t| self.deep_deref(&t)).collect();
+                let args = predicate.args.iter().map(|t| self.deep_deref(t)).collect();
                 let pre_filter = generic_rule.get_applicable_rules(&args);
 
                 self.polar_log_mute = true;
@@ -1738,11 +1743,20 @@ impl PolarVirtualMachine {
                     ));
                 }
 
-                let mut partial = partial.clone();
-                let value_partial = partial.lookup(field, value.clone());
-                let lookup_result_var = value.value().as_symbol().unwrap();
-                self.bind(lookup_result_var, value_partial);
-                self.bind(partial.name(), partial.clone().into_term());
+                self.constrain(
+                    partial,
+                    op!(
+                        Unify,
+                        value.clone(),
+                        term!(op!(Dot, args[0].clone(), field))
+                    ),
+                );
+
+                // let mut partial = partial.clone();
+                // let value_partial = partial.lookup(field, value.clone());
+                // let lookup_result_var = value.value().as_symbol().unwrap();
+                // self.bind(lookup_result_var, value_partial);
+                // self.bind(partial.name(), partial.clone().into_term());
             }
             _ => {
                 return Err(self.type_error(
@@ -1951,6 +1965,7 @@ impl PolarVirtualMachine {
     ///  - Recursive unification => more `Unify` goals are pushed onto the stack
     ///  - Failure => backtrack
     fn unify(&mut self, left: &Term, right: &Term) -> PolarResult<()> {
+        eprintln!("UNIFYING {} = {}", left.to_polar(), right.to_polar());
         match (&left.value(), &right.value()) {
             (Value::Variable(var), _) => self.unify_var(var, right)?,
             (_, Value::Variable(var)) => self.unify_var(var, left)?,
@@ -2103,12 +2118,14 @@ impl PolarVirtualMachine {
                 }
                 (Value::Partial(left_partial), _) => {
                     eprintln!("1.B {} = {}", left, right.to_polar());
-                    let op = op!(Unify, term!(left.clone()), right.clone());
+                    // TODO(gj): should this be right or right_term?
+                    let op = op!(Unify, term!(left.clone()), right_term);
                     self.constrain(left_partial, op);
                 }
                 (_, Value::Partial(right_partial)) => {
                     eprintln!("1.C {} = {}", left, right.to_polar());
-                    let op = op!(Unify, term!(left.clone()), right.clone());
+                    // TODO(gj): should this be left or left_term?
+                    let op = op!(Unify, left_term, right.clone());
                     self.constrain(right_partial, op);
                 }
                 _ => {
@@ -2124,6 +2141,8 @@ impl PolarVirtualMachine {
                 match left_term.value() {
                     Value::Partial(left_partial) => {
                         eprintln!("2.A {} = {}", left, right.to_polar());
+                        // TODO(gj): should this be left or left_term?
+                        // left, I think -- the variable that points at the partial
                         let op = op!(Unify, term!(left.clone()), right.clone());
                         self.constrain(left_partial, op);
                     }
@@ -2141,6 +2160,8 @@ impl PolarVirtualMachine {
                 match right_term.value() {
                     Value::Partial(right_partial) => {
                         eprintln!("3.A {} = {}", left, right.to_polar());
+                        // TODO(gj): should this be right or right_term?
+                        // right, I think -- the variable that points at the partial
                         let op = op!(Unify, term!(left.clone()), right.clone());
                         self.constrain(right_partial, op);
                     }
@@ -2157,13 +2178,18 @@ impl PolarVirtualMachine {
                         eprintln!("4.A {} = {}", left, right.to_polar());
                         self.bind(left, right.clone());
                     }
-                    _ => {
+                    // TODO(gj): RestVariable?
+                    Value::Variable(_) => {
                         eprintln!("4.B {} = {}", left, right.to_polar());
                         // Neither is bound, so bind them together.
                         // TODO: should theoretically bind the earliest one here?
                         let partial = Partial::new(sym!("woof"));
                         let op = op!(Unify, term!(left.clone()), right.clone());
                         self.constrain(&partial, op);
+                    }
+                    _ => {
+                        eprintln!("4.C {} = {}", left, right.to_polar());
+                        self.bind(left, right.clone());
                     }
                 }
             }
@@ -2174,6 +2200,11 @@ impl PolarVirtualMachine {
     fn constrain(&mut self, partial: &Partial, op: Operation) {
         let partial = partial.clone_with_new_constraint(op);
         for var in partial.variables().iter() {
+            eprintln!(
+                "BINDING {} <= {}",
+                var,
+                partial.clone().into_term().to_polar()
+            );
             self.bind(var, partial.clone().into_term());
         }
     }
