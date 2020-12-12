@@ -3,7 +3,8 @@
 use crate::folder::{fold_operation, fold_partial, fold_term, Folder};
 use crate::formatting::ToPolarString;
 use crate::kb::Bindings;
-use crate::terms::{Operation, Operator, Symbol, Term, TermList, Value};
+// use crate::terms::{Operation, Operator, Symbol, Term, TermList, Value};
+use crate::terms::{Operation, Operator, Symbol, Term, Value};
 
 use super::Partial;
 
@@ -57,6 +58,12 @@ impl Folder for Simplifier {
     //     fold_partial(self.deduplicate_constraints(partial), self)
     // }
 
+    fn fold_partial(&mut self, p: Partial) -> Partial {
+        fold_partial(p.clone_with_constraints(p.constraints.iter().filter(|constraint| {
+            !(matches!(constraint, Operation { operator: Operator::And, args } if args.is_empty()))
+        }).cloned().collect()), self)
+    }
+
     fn fold_operation(&mut self, o: Operation) -> Operation {
         match o.operator {
             Operator::Unify => {
@@ -78,17 +85,17 @@ impl Folder for Simplifier {
                             }
                         } else {
                             eprintln!("A.2 {} = {}", left.to_polar(), right.to_polar());
-                            eprintln!(
-                                "self.bindings[{}] => {}",
-                                other,
-                                self.bindings[other].to_polar()
-                            );
-                            Operation {
-                                operator: Operator::Unify,
-                                args: vec![
-                                    left.clone(),
-                                    fold_term(self.bindings[other].clone(), self),
-                                ],
+                            let other = &self.bindings[other];
+                            if other == &self.bindings[&self.var] {
+                                Operation {
+                                    operator: Operator::And,
+                                    args: vec![],
+                                }
+                            } else {
+                                Operation {
+                                    operator: Operator::Unify,
+                                    args: vec![left.clone(), fold_term(other.clone(), self)],
+                                }
                             }
                         }
                     }
@@ -101,17 +108,17 @@ impl Folder for Simplifier {
                             }
                         } else {
                             eprintln!("B.2 {} = {}", left.to_polar(), right.to_polar());
-                            eprintln!(
-                                "self.bindings[{}] => {}",
-                                other,
-                                self.bindings[other].to_polar()
-                            );
-                            Operation {
-                                operator: Operator::Unify,
-                                args: vec![
-                                    fold_term(self.bindings[other].clone(), self),
-                                    right.clone(),
-                                ],
+                            let other = &self.bindings[other];
+                            if other == &self.bindings[&self.var] {
+                                Operation {
+                                    operator: Operator::And,
+                                    args: vec![],
+                                }
+                            } else {
+                                Operation {
+                                    operator: Operator::Unify,
+                                    args: vec![fold_term(other.clone(), self), right.clone()],
+                                }
                             }
                         }
                     }
@@ -131,20 +138,18 @@ impl Folder for Simplifier {
                     }
                     (Value::Variable(left), Value::Variable(right)) => {
                         eprintln!("E.1 {} = {}", left.to_polar(), right.to_polar());
-                        eprintln!(
-                            "self.bindings[{}] => {}",
-                            left,
-                            self.bindings[left].to_polar()
-                        );
-                        eprintln!(
-                            "self.bindings[{}] => {}",
-                            right,
-                            self.bindings[right].to_polar()
-                        );
-                        Operation {
-                            operator: Operator::Unify,
-                            // TODO(gj): fold_term?
-                            args: vec![self.bindings[left].clone(), self.bindings[right].clone()],
+                        let left = self.bindings[left].clone();
+                        let right = self.bindings[right].clone();
+                        if left == right {
+                            Operation {
+                                operator: Operator::And,
+                                args: vec![],
+                            }
+                        } else {
+                            Operation {
+                                operator: Operator::Unify,
+                                args: vec![fold_term(left, self), fold_term(right, self)],
+                            }
                         }
                     }
                     (Value::Partial(left_partial), Value::Partial(right_partial)) => {
@@ -158,8 +163,17 @@ impl Folder for Simplifier {
                             panic!("F.2 {} = {}", left.to_polar(), right.to_polar());
                         }
                     }
-                    (Value::Variable(_), _) => {
-                        panic!("G.1 {} = {}", left.to_polar(), right.to_polar())
+                    (Value::Variable(v), _) => {
+                        let value = &self.bindings[v];
+                        if value == &self.bindings[&self.var] {
+                            eprintln!("G.1 {} = {}", left.to_polar(), right.to_polar());
+                            Operation {
+                                operator: Operator::Unify,
+                                args: vec![term!(sym!("_this")), fold_term(right.clone(), self)],
+                            }
+                        } else {
+                            panic!("G.2 {} = {}", left.to_polar(), right.to_polar());
+                        }
                     }
                     (_, Value::Variable(_)) => {
                         panic!("H.1 {} = {}", left.to_polar(), right.to_polar())
