@@ -713,53 +713,71 @@ mod test {
     fn test_partial_unification() -> TestResult {
         let p = Polar::new();
         p.load_str(
-            r#"f(x, y) if x = y;
-               f(x, y) if x = y and x = 1;
-               f(x, y) if 2 = y and x = y and x = 1;
+            r#"f(left_param, right_param) if left_param = right_param;
+               # f(x, y) if x = y and x = 1;
+               # f(x, y) if 2 = y and x = y and x = 1;
 
-               g(x, y) if x = 1 and y = 2;
-               g(x, y) if x = 1 and y = 2 and x = y;"#,
+               # g(x, y) if x = 1 and y = 2;
+               # g(x, y) if x = 1 and y = 2 and x = y;"#,
         )?;
-        let mut q = p.new_query_from_term(term!(call!("f", [sym!("x"), sym!("y")])), false);
-        assert_partial_expressions!(
-            next_binding(&mut q)?,
-            "x" => "_this = _x_7 and y = _y_8 and _x_7 = _y_8",
-            "_x_7" => "x = _this and y = _y_8 and _this = _y_8",
-            "y" => "x = _x_7 and _this = _y_8 and _x_7 = _y_8",
-            "_y_8" => "x = _x_7 and y = _this and _x_7 = _this"
-        );
-        assert_partial_expressions!(
-            next_binding(&mut q)?,
-            "x" => "_this = _x_9 and y = _y_10 and _x_9 = _y_10 and _x_9 = 1",
-            "_x_9" => "x = _this and y = _y_10 and _this = _y_10 and _this = 1",
-            "y" => "x = _x_9 and _this = _y_10 and _x_9 = _y_10 and _x_9 = 1",
-            "_y_10" => "x = _x_9 and y = _this and _x_9 = _this and _x_9 = 1"
-        );
-        assert_partial_expressions!(
-            next_binding(&mut q)?,
-            "x" => "_this = _x_11 and y = _y_12 and _y_12 = 2 and _x_11 = _y_12 and _x_11 = 1",
-            "_x_11" => "x = _this and y = _y_12 and _y_12 = 2 and _this = _y_12 and _this = 1",
-            "y" => "x = _x_11 and _this = _y_12 and _y_12 = 2 and _x_11 = _y_12 and _x_11 = 1",
-            "_y_12" => "x = _x_11 and y = _this and _this = 2 and _x_11 = _this and _x_11 = 1"
-        );
-        assert_query_done!(q);
+        // let mut q = p.new_query_from_term(term!(call!("f", [sym!("x"), sym!("y")])), false);
+        // assert_partial_expressions!(
+        //     next_binding(&mut q)?,
+        //     "x" => "_this = _x_7 and y = _y_8 and _x_7 = _y_8",
+        //     "_x_7" => "x = _this and y = _y_8 and _this = _y_8",
+        //     "y" => "x = _x_7 and _this = _y_8 and _x_7 = _y_8",
+        //     "_y_8" => "x = _x_7 and y = _this and _x_7 = _this"
+        // );
+        // assert_partial_expressions!(
+        //     next_binding(&mut q)?,
+        //     "x" => "_this = _x_9 and y = _y_10 and _x_9 = _y_10 and _x_9 = 1",
+        //     "_x_9" => "x = _this and y = _y_10 and _this = _y_10 and _this = 1",
+        //     "y" => "x = _x_9 and _this = _y_10 and _x_9 = _y_10 and _x_9 = 1",
+        //     "_y_10" => "x = _x_9 and y = _this and _x_9 = _this and _x_9 = 1"
+        // );
+        // assert_partial_expressions!(
+        //     next_binding(&mut q)?,
+        //     "x" => "_this = _x_11 and y = _y_12 and _y_12 = 2 and _x_11 = _y_12 and _x_11 = 1",
+        //     "_x_11" => "x = _this and y = _y_12 and _y_12 = 2 and _this = _y_12 and _this = 1",
+        //     "y" => "x = _x_11 and _this = _y_12 and _y_12 = 2 and _x_11 = _y_12 and _x_11 = 1",
+        //     "_y_12" => "x = _x_11 and y = _this and _this = 2 and _x_11 = _this and _x_11 = 1"
+        // );
+        // assert_query_done!(q);
+        //
+        // let mut q = p.new_query_from_term(term!(call!("g", [sym!("x"), sym!("y")])), false);
+        // assert_partial_expressions!(
+        //     next_binding(&mut q)?,
+        //     "x" => "_this = _x_17 and _x_17 = 1",
+        //     "_x_17" => "x = _this and _this = 1",
+        //     "y" => "_this = _y_18 and _y_18 = 2",
+        //     "_y_18" => "y = _this and _this = 2"
+        // );
+        // assert_partial_expressions!(
+        //     next_binding(&mut q)?,
+        //     "x" => "_this = _x_19 and _x_19 = 1 and y = _y_20 and _y_20 = 2 and _x_19 = _y_20",
+        //     "_x_19" => "x = _this and _this = 1 and y = _y_20 and _y_20 = 2 and _this = _y_20",
+        //     "y" => "x = _x_19 and _x_19 = 1 and _this = _y_20 and _y_20 = 2 and _x_19 = _y_20",
+        //     "_y_20" => "x = _x_19 and _x_19 = 1 and y = _this and _this = 2 and _x_19 = _this"
+        // );
+        // assert_query_done!(q);
 
-        let mut q = p.new_query_from_term(term!(call!("g", [sym!("x"), sym!("y")])), false);
-        assert_partial_expressions!(
-            next_binding(&mut q)?,
-            "x" => "_this = _x_17 and _x_17 = 1",
-            "_x_17" => "x = _this and _this = 1",
-            "y" => "_this = _y_18 and _y_18 = 2",
-            "_y_18" => "y = _this and _this = 2"
+        let mut q = p.new_query_from_term(
+            term!(call!(
+                "f",
+                [sym!("left_var_arg"), partial!("right_partial_arg")]
+            )),
+            false,
         );
-        assert_partial_expressions!(
-            next_binding(&mut q)?,
-            "x" => "_this = _x_19 and _x_19 = 1 and y = _y_20 and _y_20 = 2 and _x_19 = _y_20",
-            "_x_19" => "x = _this and _this = 1 and y = _y_20 and _y_20 = 2 and _this = _y_20",
-            "y" => "x = _x_19 and _x_19 = 1 and _this = _y_20 and _y_20 = 2 and _x_19 = _y_20",
-            "_y_20" => "x = _x_19 and _x_19 = 1 and y = _this and _this = 2 and _x_19 = _this"
-        );
-        assert_query_done!(q);
+        for (var, val) in next_binding(&mut q)? {
+            eprintln!("{} => {}", var, val.to_polar());
+        }
+        // assert_partial_expressions!(
+        //     next_binding(&mut q)?,
+        //     "x" => "_this = _x_7 and y = _y_8 and _x_7 = _y_8",
+        //     "_x_7" => "x = _this and y = _y_8 and _this = _y_8",
+        //     "y" => "x = _x_7 and _this = _y_8 and _x_7 = _y_8",
+        //     "_y_8" => "x = _x_7 and y = _this and _x_7 = _this"
+        // );
         Ok(())
     }
 

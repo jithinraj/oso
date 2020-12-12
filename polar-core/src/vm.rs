@@ -2094,20 +2094,25 @@ impl PolarVirtualMachine {
         match (left_value, right_value) {
             (Some(left_term), Some(right_term)) => match (left_term.value(), right_term.value()) {
                 (Value::Partial(left_partial), Value::Partial(right_partial)) => {
+                    eprintln!("1.A {} = {}", left, right.to_polar());
+                    eprintln!("1.A {} = {}", left_term.to_polar(), right_term.to_polar());
                     let mut combined = left_partial.clone();
                     combined.merge_constraints(right_partial.clone());
                     let op = op!(Unify, term!(left.clone()), right.clone());
                     self.constrain(&combined, op);
                 }
                 (Value::Partial(left_partial), _) => {
+                    eprintln!("1.B {} = {}", left, right.to_polar());
                     let op = op!(Unify, term!(left.clone()), right.clone());
                     self.constrain(left_partial, op);
                 }
                 (_, Value::Partial(right_partial)) => {
+                    eprintln!("1.C {} = {}", left, right.to_polar());
                     let op = op!(Unify, term!(left.clone()), right.clone());
                     self.constrain(right_partial, op);
                 }
                 _ => {
+                    eprintln!("1.D {} = {}", left, right.to_polar());
                     // Both are bound, unify their values.
                     self.push_goal(Goal::Unify {
                         left: left_term,
@@ -2115,13 +2120,15 @@ impl PolarVirtualMachine {
                     })?;
                 }
             },
-            (Some(left_term), _) => {
+            (Some(left_term), None) => {
                 match left_term.value() {
                     Value::Partial(left_partial) => {
+                        eprintln!("2.A {} = {}", left, right.to_polar());
                         let op = op!(Unify, term!(left.clone()), right.clone());
                         self.constrain(left_partial, op);
                     }
                     _ => {
+                        eprintln!("2.B {} = {}", left, right.to_polar());
                         // Only left is bound, unify with whatever right is.
                         self.push_goal(Goal::Unify {
                             left: left_term,
@@ -2133,21 +2140,32 @@ impl PolarVirtualMachine {
             (None, Some(right_term)) => {
                 match right_term.value() {
                     Value::Partial(right_partial) => {
+                        eprintln!("3.A {} = {}", left, right.to_polar());
                         let op = op!(Unify, term!(left.clone()), right.clone());
                         self.constrain(right_partial, op);
                     }
                     _ => {
+                        eprintln!("3.B {} = {}", left, right.to_polar());
                         // Left is unbound, right is bound; bind left to the value of right.
                         self.bind(left, right_term);
                     }
                 }
             }
             (None, None) => {
-                // Neither is bound, so bind them together.
-                // TODO: should theoretically bind the earliest one here?
-                let partial = Partial::new(sym!("woof"));
-                let op = op!(Unify, term!(left.clone()), right.clone());
-                self.constrain(&partial, op);
+                match right.value() {
+                    Value::Partial(_) => {
+                        eprintln!("4.A {} = {}", left, right.to_polar());
+                        self.bind(left, right.clone());
+                    }
+                    _ => {
+                        eprintln!("4.B {} = {}", left, right.to_polar());
+                        // Neither is bound, so bind them together.
+                        // TODO: should theoretically bind the earliest one here?
+                        let partial = Partial::new(sym!("woof"));
+                        let op = op!(Unify, term!(left.clone()), right.clone());
+                        self.constrain(&partial, op);
+                    }
+                }
             }
         }
         Ok(())
