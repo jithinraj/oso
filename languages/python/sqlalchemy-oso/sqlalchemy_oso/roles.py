@@ -266,12 +266,22 @@ def resource_role_class(declarative_base, user_model, resource_model, roles):
 
 
 def get_role_model_for_resource_model(resource_model):
-    return inspect(resource_model).relationships.get("roles").argument.class_
+    try:
+        return (
+            inspect(resource_model, raiseerr=True)
+            .relationships.get("roles")
+            .argument.class_
+        )
+    except AttributeError:
+        raise TypeError(f"Expected a model; received: {resource_model}")
 
 
 def get_user_model_for_resource_model(resource_model):
-    role_model = get_role_model_for_resource_model(resource_model)
-    return inspect(role_model).relationships.get("users").argument()
+    try:
+        role_model = get_role_model_for_resource_model(resource_model)
+        return inspect(role_model).relationships.get("users").argument()
+    except AttributeError:
+        raise TypeError(f"Expected a model; received: {resource_model}")
 
 
 def get_user_resources_and_roles(session, user, resource_model):
@@ -433,6 +443,7 @@ def add_user_role(session, user, resource, role_name):
     if role:
         # TODO: check if user already in role
         role.users.append(user)
+        session.commit()
     else:
         resource_name = resource_model.__name__.lower()
         kwargs = {"name": role_name, resource_name: resource, "users": [user]}
