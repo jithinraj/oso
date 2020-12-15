@@ -6,6 +6,7 @@ use crate::counter::Counter;
 use crate::error::PolarResult;
 use crate::events::QueryEvent;
 use crate::folder::{fold_value, Folder};
+use crate::formatting::ToPolarString;
 use crate::kb::Bindings;
 use crate::partial::Partial;
 use crate::runnable::Runnable;
@@ -35,14 +36,21 @@ impl Inverter {
 
         impl Visitor for CspVisitor {
             fn visit_partial(&mut self, p: &Partial) {
-                let v = p.variable.clone();
                 let csp = p.constraints().len();
-                if let Some(prev) = self.csps.insert(v.clone(), csp) {
-                    assert_eq!(
-                        prev, csp,
-                        "csps don't match for {}\n\told: {}\n\tnew: {}",
-                        v.0, prev, csp
+                for v in p.variables() {
+                    eprintln!(
+                        "@@@@@@@@@@@@@@@@@@@@@@@@@@ {} - {} - {}",
+                        v,
+                        csp,
+                        p.clone().into_term().to_polar()
                     );
+                    if let Some(prev) = self.csps.insert(v.clone(), csp) {
+                        assert_eq!(
+                            prev, csp,
+                            "csps don't match for {}\n\told: {}\n\tnew: {}",
+                            v.0, prev, csp
+                        );
+                    }
                 }
             }
         }
@@ -53,6 +61,7 @@ impl Inverter {
 
         goals.iter().for_each(|g| {
             if let Goal::Query { term } = g {
+                eprintln!("@SKLASJDFLKAJSDFLKJASDLFKJASDLFJK");
                 walk_term(&mut visitor, &vm.deep_deref(term));
             }
         });
@@ -68,17 +77,24 @@ impl Inverter {
 }
 
 struct PartialInverter {
-    csps: HashMap<Symbol, usize>,
+    existing: BindingStack,
 }
 
 impl PartialInverter {
-    pub fn new(csps: HashMap<Symbol, usize>) -> Self {
-        Self { csps }
+    pub fn new(existing: BindingStack) -> Self {
+        Self { existing }
     }
 
-    fn invert_partial(&mut self, p: &Partial) -> Partial {
-        let csp = self.csps.get(&p.variable).unwrap_or(&0);
-        p.clone_with_constraints(p.inverted_constraints(*csp))
+    fn invert_partial(&mut self, p: &Partial, var: &Symbol) -> Partial {
+        // TODO(gj): get one of partial's variables, invert it, and then update the binding for all
+        // of its variables.
+        // let var = &p.variables().into_iter().take(1).collect::<Vec<Symbol>>()[0];
+        // let csp = self.csps.get(var).unwrap_or(&0);
+        
+        self.existing.iter().rfind(|Binding(_, value)| p.constraints.starts_with(value.constraints))
+        let new_p = p.clone_with_constraints(p.inverted_constraints(*csp));
+        eprintln!("INVERTED: {}", new_p.clone().into_term().to_polar());
+        new_p
     }
 }
 
@@ -93,8 +109,8 @@ impl Folder for PartialInverter {
 }
 
 /// Invert all partials in `bindings` and return them.
-fn invert_partials(bindings: BindingStack, csps: HashMap<Symbol, usize>) -> BindingStack {
-    let mut inverter = PartialInverter::new(csps);
+fn invert_partials(bindings: BindingStack, old_bindings: BindingStack) -> BindingStack {
+    let mut inverter = PartialInverter::new(old_bindings);
     bindings
         .into_iter()
         .map(|Binding(var, value)| Binding(var, inverter.fold_term(value)))
@@ -149,7 +165,12 @@ impl Runnable for Inverter {
                         self.bindings.borrow_mut().extend(
                             self.results
                                 .drain(..)
-                                .map(|b| invert_partials(b, csps.clone()))
+                                .map(|b| {
+                                    // TODO(gj): maybe off by one
+                                    let bindings = self.vm.bindings[..self.bsp].to_owned();
+
+                                    invert_partials(b, bindings)
+                                })
                                 .fold(Bindings::new(), reduce_constraints)
                                 .drain()
                                 .map(|(var, value)| {
@@ -163,16 +184,16 @@ impl Runnable for Inverter {
                     return Ok(QueryEvent::Done { result });
                 }
                 QueryEvent::Result { .. } => {
-                    if self.vm.query_contains_partial {
-                        let bindings = self.vm.bindings[self.bsp..].to_owned();
-                        let derefed = bindings
-                            .into_iter()
-                            .map(|Binding(var, value)| Binding(var, self.vm.deep_deref(&value)))
-                            .collect();
-                        self.results.push(derefed);
-                    } else {
-                        return Ok(QueryEvent::Done { result: false });
-                    }
+                    // if self.vm.query_contains_partial {
+                    let bindings = self.vm.bindings[self.bsp..].to_owned();
+                    let derefed = bindings
+                        .into_iter()
+                        .map(|Binding(var, value)| Binding(var, self.vm.deep_deref(&value)))
+                        .collect();
+                    self.results.push(derefed);
+                    // } else {
+                    //     return Ok(QueryEvent::Done { result: false });
+                    // }
                 }
                 event => return Ok(event),
             }
