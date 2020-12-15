@@ -11,6 +11,62 @@ use super::Partial;
 /// A trivially true expression.
 const TRUE: Operation = op!(And);
 
+/// Invert operators.
+fn invert_operation(Operation { operator, args }: Operation) -> Operation {
+    fn invert_args(args: Vec<Term>) -> Vec<Term> {
+        args.into_iter()
+            .map(|t| {
+                t.clone_with_value(value!(invert_operation(
+                    t.value().as_expression().unwrap().clone()
+                )))
+            })
+            .collect()
+    }
+
+    match operator {
+        Operator::And => Operation {
+            operator: Operator::Or,
+            args: invert_args(args),
+        },
+        Operator::Or => Operation {
+            operator: Operator::And,
+            args: invert_args(args),
+        },
+        Operator::Unify | Operator::Eq => Operation {
+            operator: Operator::Neq,
+            args,
+        },
+        Operator::Neq => Operation {
+            operator: Operator::Unify,
+            args,
+        },
+        Operator::Gt => Operation {
+            operator: Operator::Leq,
+            args,
+        },
+        Operator::Geq => Operation {
+            operator: Operator::Lt,
+            args,
+        },
+        Operator::Lt => Operation {
+            operator: Operator::Geq,
+            args,
+        },
+        Operator::Leq => Operation {
+            operator: Operator::Gt,
+            args,
+        },
+        Operator::Debug | Operator::Print | Operator::New | Operator::Dot => {
+            Operation { operator, args }
+        }
+        Operator::Isa => Operation {
+            operator: Operator::Not,
+            args: vec![term!(op!(Isa, args[0].clone(), args[1].clone()))],
+        },
+        _ => todo!("negate {:?}", operator),
+    }
+}
+
 /// Simplify the values of the bindings to be returned to the host language.
 ///
 /// - For partials, simplify the constraint expressions.
@@ -36,7 +92,9 @@ pub struct Simplifier {
 
 impl Folder for Simplifier {
     fn fold_term(&mut self, t: Term) -> Term {
-        fold_term(self.deref(&t), self)
+        let x = self.deref(&t);
+        eprintln!("X = {}", x);
+        fold_term(x, self)
     }
 
     fn fold_partial(&mut self, mut p: Partial) -> Partial {
@@ -49,40 +107,49 @@ impl Folder for Simplifier {
             .cloned()
             .collect();
 
-        if let Some(i) = p.constraints.iter().position(|o| {
-            o.operator == Operator::Unify && {
+        if let Some(i) = p.constraints.iter().position(|o| match o.operator {
+            Operator::Unify | Operator::Neq => {
                 let left = &o.args[0];
                 let right = &o.args[1];
+                let invert = o.operator == Operator::Neq;
                 left == right
                     || match (left.value(), right.value()) {
                         (Value::Variable(v), x) if !self.is_this_var(left) && x.is_ground() => {
                             eprintln!("A {} ← {}", left.to_polar(), right.to_polar());
-                            self.bind(v.clone(), right.clone());
+                            self.bind(v.clone(), right.clone(), invert);
                             true
                         }
                         (x, Value::Variable(v)) if !self.is_this_var(right) && x.is_ground() => {
                             eprintln!("B {} ← {}", right.to_polar(), left.to_polar());
-                            self.bind(v.clone(), left.clone());
+                            self.bind(v.clone(), left.clone(), invert);
                             true
                         }
                         (_, Value::Variable(v)) if self.is_this_var(left) => {
                             eprintln!("C {} ← {}", right.to_polar(), left.to_polar());
-                            self.bind(v.clone(), left.clone());
+                            self.bind(v.clone(), left.clone(), invert);
                             false
                         }
                         (Value::Variable(v), _) if self.is_this_var(right) => {
                             eprintln!("D {} ← {}", left.to_polar(), right.to_polar());
-                            self.bind(v.clone(), right.clone());
+                            self.bind(v.clone(), right.clone(), invert);
                             false
                         }
                         _ => false,
                     }
             }
+            _ => false,
         }) {
-            eprintln!("CHOSEN CONSTRAINT: {:?}", &p.constraints[i]);
+            eprintln!("CHOSEN CONSTRAINT: {}", &p.constraints[i].to_polar());
             p.constraints.remove(i);
         }
         fold_partial(p, self)
+    }
+
+    fn fold_operation(&mut self, o: Operation) -> Operation {
+        match o.operator {
+            Operator::Not => invert_operation(o.args[0].value().as_expression().unwrap().clone()),
+            _ => o,
+        }
     }
 
     // fn fold_operation(&mut self, mut o: Operation) -> Operation {
@@ -148,9 +215,17 @@ impl Simplifier {
         }
     }
 
-    pub fn bind(&mut self, var: Symbol, value: Term) {
+    pub fn bind(&mut self, var: Symbol, value: Term, invert: bool) {
         // TODO(ap): check that if there's a current value, it's equal to the new one.
-        self.bindings.insert(var, value);
+        self.bindings.insert(
+            var.clone(),
+            if invert {
+                value.clone_with_value(value!(op!(Not, value.clone())))
+            } else {
+                value
+            },
+        );
+        eprintln!("Simplifier.bind({}, {}, {})", &var, self.bindings[&var].to_polar(), invert);
     }
 
     pub fn deref(&self, term: &Term) -> Term {
