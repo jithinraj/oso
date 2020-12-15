@@ -76,29 +76,26 @@ impl Inverter {
     }
 }
 
-struct PartialInverter {
-    existing: BindingStack,
+struct PartialInverter<'a> {
+    old_value: &'a Term,
 }
 
-impl PartialInverter {
-    pub fn new(existing: BindingStack) -> Self {
-        Self { existing }
+impl<'a> PartialInverter<'a> {
+    pub fn new(old_value: &'a Term) -> Self {
+        Self { old_value }
     }
 
-    fn invert_partial(&mut self, p: &Partial, var: &Symbol) -> Partial {
-        // TODO(gj): get one of partial's variables, invert it, and then update the binding for all
-        // of its variables.
-        // let var = &p.variables().into_iter().take(1).collect::<Vec<Symbol>>()[0];
-        // let csp = self.csps.get(var).unwrap_or(&0);
-        
-        self.existing.iter().rfind(|Binding(_, value)| p.constraints.starts_with(value.constraints))
-        let new_p = p.clone_with_constraints(p.inverted_constraints(*csp));
-        eprintln!("INVERTED: {}", new_p.clone().into_term().to_polar());
-        new_p
+    fn invert_partial(&mut self, p: &Partial) -> Partial {
+        // Compute csp from old_value vs. p.
+        let csp = match self.old_value.value() {
+            Value::Partial(q) => q.constraints().len(),
+            _ => 0,
+        };
+        p.clone_with_constraints(p.inverted_constraints(csp))
     }
 }
 
-impl Folder for PartialInverter {
+impl<'a> Folder for PartialInverter<'a> {
     /// Invert top-level constraints.
     fn fold_term(&mut self, t: Term) -> Term {
         t.clone_with_value(match t.value() {
@@ -109,11 +106,14 @@ impl Folder for PartialInverter {
 }
 
 /// Invert all partials in `bindings` and return them.
-fn invert_partials(bindings: BindingStack, old_bindings: BindingStack) -> BindingStack {
-    let mut inverter = PartialInverter::new(old_bindings);
+fn invert_partials(bindings: BindingStack, old_bindings: &[Binding]) -> BindingStack {
     bindings
         .into_iter()
-        .map(|Binding(var, value)| Binding(var, inverter.fold_term(value)))
+        .map(|Binding(var, value)| {
+            let old_value = &old_bindings.iter().rfind(|Binding(v, _)| *v == var).unwrap().1;
+            eprintln!("Old value of {}: {}", var, old_value.to_polar());
+            Binding(var, PartialInverter::new(old_value).fold_term(value))
+        })
         .collect()
 }
 
@@ -161,16 +161,11 @@ impl Runnable for Inverter {
                 QueryEvent::Done { .. } => {
                     let mut result = self.results.is_empty();
                     if !result {
-                        let csps = self.csps.clone();
+                        let old_bindings = self.vm.bindings[..self.bsp].to_owned();
                         self.bindings.borrow_mut().extend(
                             self.results
                                 .drain(..)
-                                .map(|b| {
-                                    // TODO(gj): maybe off by one
-                                    let bindings = self.vm.bindings[..self.bsp].to_owned();
-
-                                    invert_partials(b, bindings)
-                                })
+                                .map(|bindings| invert_partials(bindings, &old_bindings))
                                 .fold(Bindings::new(), reduce_constraints)
                                 .drain()
                                 .map(|(var, value)| {
