@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::folder::{fold_partial, fold_term, Folder};
+use crate::folder::{fold_operation, fold_partial, fold_term, Folder};
 use crate::formatting::ToPolarString;
 use crate::kb::Bindings;
 // use crate::terms::{Operation, Operator, Symbol, Term, TermList, Value};
@@ -71,7 +71,7 @@ fn invert_operation(Operation { operator, args }: Operation) -> Operation {
 ///
 /// - For partials, simplify the constraint expressions.
 /// - For non-partials, deep deref.
-/// TODO(ap): deep dref.
+/// TODO(ap): deep deref.
 pub fn simplify_bindings(bindings: Bindings) -> Bindings {
     bindings
         .into_iter()
@@ -107,37 +107,51 @@ impl Folder for Simplifier {
             .cloned()
             .collect();
 
-        if let Some(i) = p.constraints.iter().position(|o| match o.operator {
-            Operator::Unify | Operator::Neq => {
-                let left = &o.args[0];
-                let right = &o.args[1];
-                let invert = o.operator == Operator::Neq;
-                left == right
-                    || match (left.value(), right.value()) {
-                        (Value::Variable(v), x) if !self.is_this_var(left) && x.is_ground() => {
-                            eprintln!("A {} ← {}", left.to_polar(), right.to_polar());
-                            self.bind(v.clone(), right.clone(), invert);
-                            true
-                        }
-                        (x, Value::Variable(v)) if !self.is_this_var(right) && x.is_ground() => {
-                            eprintln!("B {} ← {}", right.to_polar(), left.to_polar());
-                            self.bind(v.clone(), left.clone(), invert);
-                            true
-                        }
-                        (_, Value::Variable(v)) if self.is_this_var(left) => {
-                            eprintln!("C {} ← {}", right.to_polar(), left.to_polar());
-                            self.bind(v.clone(), left.clone(), invert);
-                            false
-                        }
-                        (Value::Variable(v), _) if self.is_this_var(right) => {
-                            eprintln!("D {} ← {}", left.to_polar(), right.to_polar());
-                            self.bind(v.clone(), right.clone(), invert);
-                            false
-                        }
-                        _ => false,
-                    }
+        if let Some(i) = p.constraints.iter().position(|o| {
+            let mut o = o.clone();
+            let mut invert = false;
+            if o.operator == Operator::Not {
+                o = o.args[0].value().as_expression().unwrap().clone();
+                invert = true;
             }
-            _ => false,
+            match o.operator {
+                Operator::Unify | Operator::Neq => {
+                    let left = &o.args[0];
+                    let right = &o.args[1];
+                    let invert = if invert {
+                        o.operator != Operator::Neq
+                    } else {
+                        o.operator == Operator::Neq
+                    };
+                    left == right
+                        || match (left.value(), right.value()) {
+                            (Value::Variable(v), x) if !self.is_this_var(left) && x.is_ground() => {
+                                eprintln!("A {} ← {}", left.to_polar(), right.to_polar());
+                                self.bind(v.clone(), right.clone(), invert);
+                                true
+                            }
+                            (x, Value::Variable(v))
+                                if !self.is_this_var(right) && x.is_ground() =>
+                            {
+                                eprintln!("B {} ← {}", right.to_polar(), left.to_polar());
+                                self.bind(v.clone(), left.clone(), invert);
+                                true
+                            }
+                            (_, Value::Variable(v)) if self.is_this_var(left) => {
+                                eprintln!("C {} ← {}", right.to_polar(), left.to_polar());
+                                self.bind(v.clone(), left.clone(), invert);
+                                false
+                            }
+                            (Value::Variable(v), _) if self.is_this_var(right) => {
+                                eprintln!("D {} ← {}", left.to_polar(), right.to_polar());
+                                self.bind(v.clone(), right.clone(), invert);
+                                false
+                            }
+                            _ => false,
+                        }
+                }
+                _ => false,
+            }
         }) {
             eprintln!("CHOSEN CONSTRAINT: {}", &p.constraints[i].to_polar());
             p.constraints.remove(i);
@@ -146,10 +160,48 @@ impl Folder for Simplifier {
     }
 
     fn fold_operation(&mut self, o: Operation) -> Operation {
-        match o.operator {
-            Operator::Not => invert_operation(o.args[0].value().as_expression().unwrap().clone()),
-            _ => o,
-        }
+        fold_operation(
+            match o.operator {
+                Operator::Unify
+                | Operator::Eq
+                | Operator::Neq
+                | Operator::Gt
+                | Operator::Geq
+                | Operator::Lt
+                | Operator::Leq => {
+                    let left = &o.args[0];
+                    let right = &o.args[1];
+
+                    match (left.value().as_expression(), right.value().as_expression()) {
+                        (Ok(left), Ok(right))
+                            if left.operator == Operator::Not
+                                && right.operator == Operator::Not =>
+                        {
+                            todo!("not 1 = not 2");
+                        }
+                        (Ok(left), _) if left.operator == Operator::Not => {
+                            invert_operation(Operation {
+                                operator: o.operator,
+                                args: vec![left.args[0].clone(), right.clone()],
+                            })
+                        }
+                        (_, Ok(right)) if right.operator == Operator::Not => {
+                            invert_operation(Operation {
+                                operator: o.operator,
+                                args: vec![left.clone(), right.args[0].clone()],
+                            })
+                        }
+                        _ => o,
+                    }
+                }
+                Operator::Not => match o.args[0].value().as_expression() {
+                    Ok(o) => invert_operation(o.clone()),
+                    _ => return o,
+                },
+                _ => o,
+            },
+            self,
+        )
     }
 
     // fn fold_operation(&mut self, mut o: Operation) -> Operation {
@@ -225,7 +277,12 @@ impl Simplifier {
                 value
             },
         );
-        eprintln!("Simplifier.bind({}, {}, {})", &var, self.bindings[&var].to_polar(), invert);
+        eprintln!(
+            "Simplifier.bind({}, {}, {})",
+            &var,
+            self.bindings[&var].to_polar(),
+            invert
+        );
     }
 
     pub fn deref(&self, term: &Term) -> Term {
@@ -253,30 +310,6 @@ impl Simplifier {
             _ => false,
         }
     }
-
-    // /// If `operation` is a 1-arg AND or OR operation, return its argument.
-    // ///
-    // /// Returns: Some(op) if a rewrite occurred; otherwise None.
-    // fn maybe_unwrap_single_argument_and_or(&self, operation: &Operation) -> Option<Operation> {
-    //     match operation {
-    //         // Unwrap a single-arg And or Or expression and fold the inner term.
-    //         Operation {
-    //             operator: Operator::And,
-    //             args,
-    //         }
-    //         | Operation {
-    //             operator: Operator::Or,
-    //             args,
-    //         } if args.len() == 1 => {
-    //             if let Value::Expression(op) = args[0].value() {
-    //                 Some(op.clone())
-    //             } else {
-    //                 None
-    //             }
-    //         }
-    //         _ => None,
-    //     }
-    // }
 
     /// Substitute `sym!(_"this")` for our variable in a partial.
     fn sub_this(&self, term: Term) -> Term {
